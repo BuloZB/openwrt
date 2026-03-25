@@ -7,6 +7,7 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  actions: read
 
 jobs:
   code-review:
@@ -25,14 +26,8 @@ jobs:
           fetch-depth: 1
 
       - name: PR Review
-        uses: anthropics/claude-code-action@6062f3709600659be5e47fcddf2cf76993c235c2 # v1
+        uses: hauke/claude-code-action@95d07da986168a9998e8e4713ec29b7c162b4dd9 # v1.0.77-fixed
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           trigger_phrase: "/claude"
-          prompt: >-
-            Review this PR for an OpenWrt embedded Linux project,
-            focusing on correctness, security, and coding conventions.
-          claude_args: >-
-            --allowedTools
-            "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
