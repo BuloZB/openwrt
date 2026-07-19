@@ -41,7 +41,18 @@
 #include "mdio.h"
 #include "ethtool.h"
 
+#if IS_ENABLED(CONFIG_NET_DSA)
+#include <net/dsa.h>
+#endif
+
+#if defined(CONFIG_SOC_MT7620)
+#define	DMA_FWD_REG		MT7620A_GDMA1_FWD_CFG
+#define	MAX_RX_LENGTH		2048
+#else
+#define DMA_FWD_REG		FE_GDMA1_FWD_CFG
 #define	MAX_RX_LENGTH		1536
+#endif
+
 #define FE_RX_ETH_HLEN		(VLAN_ETH_HLEN + VLAN_HLEN + ETH_FCS_LEN)
 #define FE_RX_HLEN		(NET_SKB_PAD + FE_RX_ETH_HLEN + NET_IP_ALIGN)
 #define DMA_DUMMY_DESC		0xffffffff
@@ -779,6 +790,35 @@ err_out:
 	return -1;
 }
 
+#if IS_ENABLED(CONFIG_NET_DSA)
+static netdev_features_t fe_features_check(struct sk_buff *skb,
+					   struct net_device *dev,
+					   netdev_features_t features)
+{
+	/* No point in doing any of this if neither checksum nor GSO are
+	 * being requested for this frame. We can rule out both by just
+	 * checking for CHECKSUM_PARTIAL
+	 */
+	if (skb->ip_summed != CHECKSUM_PARTIAL)
+		return features;
+
+	if (netdev_uses_dsa(dev)) {
+		const struct dsa_device_ops *tag_ops = dev->dsa_ptr->tag_ops;
+
+		/* RTL8_4 hides the L2 ethertype this driver relies on for
+		 * offload. RTL8_4T (the trailing-tag variant) is unaffected
+		 * because its rtl8_4t tagger already checksums the frame in
+		 * software before appending the tag, so ip_summed is no longer
+		 * CHECKSUM_PARTIAL by the time this driver sees it.
+		 */
+		if (tag_ops->proto == DSA_TAG_PROTO_RTL8_4)
+			features &= ~(NETIF_F_CSUM_MASK | NETIF_F_GSO_MASK);
+	}
+
+	return features;
+}
+#endif
+
 static inline int fe_skb_padto(struct sk_buff *skb, struct fe_priv *priv)
 {
 	unsigned int len;
@@ -1169,7 +1209,7 @@ void fe_fwd_config(struct fe_priv *priv)
 {
 	u32 fwd_cfg;
 
-	fwd_cfg = fe_r32(FE_GDMA1_FWD_CFG);
+	fwd_cfg = fe_r32(DMA_FWD_REG);
 
 	/* disable jumbo frame */
 	if (priv->flags & FE_FLAG_JUMBO_FRAME)
@@ -1178,19 +1218,19 @@ void fe_fwd_config(struct fe_priv *priv)
 	/* set unicast/multicast/broadcast frame to cpu */
 	fwd_cfg &= ~0xffff;
 
-	fe_w32(fwd_cfg, FE_GDMA1_FWD_CFG);
+	fe_w32(fwd_cfg, DMA_FWD_REG);
 }
 
 static void fe_rxcsum_config(bool enable)
 {
 	if (enable)
-		fe_w32(fe_r32(FE_GDMA1_FWD_CFG) | (FE_GDM1_ICS_EN |
+		fe_w32(fe_r32(DMA_FWD_REG) | (FE_GDM1_ICS_EN |
 					FE_GDM1_TCS_EN | FE_GDM1_UCS_EN),
-				FE_GDMA1_FWD_CFG);
+				DMA_FWD_REG);
 	else
-		fe_w32(fe_r32(FE_GDMA1_FWD_CFG) & ~(FE_GDM1_ICS_EN |
+		fe_w32(fe_r32(DMA_FWD_REG) & ~(FE_GDM1_ICS_EN |
 					FE_GDM1_TCS_EN | FE_GDM1_UCS_EN),
-				FE_GDMA1_FWD_CFG);
+				DMA_FWD_REG);
 }
 
 static void fe_txcsum_config(bool enable)
@@ -1445,12 +1485,11 @@ static int fe_change_mtu(struct net_device *dev, int new_mtu)
 		priv->rx_ring.frag_size = PAGE_SIZE;
 	priv->rx_ring.rx_buf_size = fe_max_buf_size(priv->rx_ring.frag_size);
 
-	if (!netif_running(dev))
-		return 0;
+	if (netif_running(dev))
+		fe_stop(dev);
 
-	fe_stop(dev);
 	if (!IS_ENABLED(CONFIG_SOC_MT7621)) {
-		fwd_cfg = fe_r32(FE_GDMA1_FWD_CFG);
+		fwd_cfg = fe_r32(DMA_FWD_REG);
 		if (new_mtu <= ETH_DATA_LEN) {
 			fwd_cfg &= ~FE_GDM1_JMB_EN;
 		} else {
@@ -1459,10 +1498,13 @@ static int fe_change_mtu(struct net_device *dev, int new_mtu)
 			fwd_cfg |= (DIV_ROUND_UP(frag_size, 1024) <<
 			FE_GDM1_JMB_LEN_SHIFT) | FE_GDM1_JMB_EN;
 		}
-		fe_w32(fwd_cfg, FE_GDMA1_FWD_CFG);
+		fe_w32(fwd_cfg, DMA_FWD_REG);
 	}
 
-	return fe_open(dev);
+	if (netif_running(dev))
+		return fe_open(dev);
+
+	return 0;
 }
 
 static const struct net_device_ops fe_netdev_ops = {
@@ -1481,6 +1523,9 @@ static const struct net_device_ops fe_netdev_ops = {
 	.ndo_vlan_rx_kill_vid	= fe_vlan_rx_kill_vid,
 #ifdef CONFIG_NET_POLL_CONTROLLER
 	.ndo_poll_controller	= fe_poll_controller,
+#endif
+#if IS_ENABLED(CONFIG_NET_DSA)
+	.ndo_features_check     = fe_features_check,
 #endif
 };
 
@@ -1581,7 +1626,7 @@ static int fe_probe(struct platform_device *pdev)
 				  NETIF_F_HW_VLAN_CTAG_RX);
 	netdev->features |= netdev->hw_features;
 
-	if (IS_ENABLED(CONFIG_SOC_MT7621))
+	if (IS_ENABLED(CONFIG_SOC_MT7620) || IS_ENABLED(CONFIG_SOC_MT7621))
 		netdev->max_mtu = 2048;
 
 	/* fake rx vlan filter func. to support tx vlan offload func */
