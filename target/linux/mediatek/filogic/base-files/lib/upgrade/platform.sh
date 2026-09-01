@@ -130,6 +130,20 @@ update_oem_ubi_volume() {
 	ubiupdatevol "/dev/$ubidev" -s "$oem_volume_size" "$oem_volume_data"
 }
 
+# Write both volume sets used by the MediaTek SDK bootloader, so that
+# whichever of the two it ends up selecting carries the new firmware.
+mtk_dual_boot_flash_both_slots() {
+	echo "UPGRADING SECOND SLOT"
+	CI_KERNPART="kernel2"
+	CI_ROOTPART="rootfs2"
+	nand_do_flash_file "$1" || nand_do_upgrade_failed
+
+	echo "UPGRADING PRIMARY SLOT"
+	CI_KERNPART="kernel"
+	CI_ROOTPART="rootfs"
+	nand_do_flash_file "$1" || nand_do_upgrade_failed
+}
+
 platform_do_upgrade() {
 	local board=$(board_name)
 
@@ -143,6 +157,7 @@ platform_do_upgrade() {
 	bananapi,bpi-r4-2g5|\
 	bananapi,bpi-r4-poe|\
 	bananapi,bpi-r4-lite|\
+	bananapi,bpi-r4-pro-8x|\
 	bazis,ax3000wm|\
 	cmcc,a10-ubootmod|\
 	cmcc,rax3000m|\
@@ -166,6 +181,7 @@ platform_do_upgrade() {
 	konka,komi-a31|\
 	mediatek,mt7981-rfb|\
 	mediatek,mt7988a-rfb|\
+	mercusys,mr85x-ubi|\
 	mercusys,mr90x-v1-ubi|\
 	netis,eap930-v1|\
 	netis,n6-v2|\
@@ -181,6 +197,7 @@ platform_do_upgrade() {
 	routerich,ax3000-ubootmod|\
 	routerich,be7200|\
 	snr,snr-cpe-ax2|\
+	teralink,tl3020-256mb|\
 	tplink,be450-ubi|\
 	tplink,tl-xdr4288|\
 	tplink,tl-xdr6086|\
@@ -279,7 +296,6 @@ platform_do_upgrade() {
 	kebidumei,ax3000-u22|\
 	totolink,x6000r|\
 	wavlink,wl-wn573hx3|\
-	wavlink,wl-wnt100x3|\
 	widelantech,wap430x|\
 	yuncore,ax835)
 		default_do_upgrade "$1"
@@ -317,15 +333,15 @@ platform_do_upgrade() {
 		CI_UBIPART="ubi0"
 		nand_do_upgrade "$1"
 		;;
+	ltc,vl7m19k)
+		mtk_dual_boot_flash_both_slots "$1"
+		# clear any marker the bootloader set after failing to verify
+		fw_setenv dual_boot.slot_0_invalid 0
+		fw_setenv dual_boot.slot_1_invalid 0
+		nand_do_upgrade_success
+		;;
 	netgear,eax17)
-		echo "UPGRADING SECOND SLOT"
-		CI_KERNPART="kernel2"
-		CI_ROOTPART="rootfs2"
-		nand_do_flash_file "$1" || nand_do_upgrade_failed
-		echo "UPGRADING PRIMARY SLOT"
-		CI_KERNPART="kernel"
-		CI_ROOTPART="rootfs"
-		nand_do_flash_file "$1" || nand_do_upgrade_failed
+		mtk_dual_boot_flash_both_slots "$1"
 		nand_do_upgrade_success
 		;;
 	tplink,fr365-v1|\
@@ -390,6 +406,7 @@ platform_check_image() {
 	bananapi,bpi-r4-2g5|\
 	bananapi,bpi-r4-poe|\
 	bananapi,bpi-r4-lite|\
+	bananapi,bpi-r4-pro-8x|\
 	bazis,ax3000wm|\
 	cmcc,a10-ubootmod|\
 	cmcc,rax3000m|\
@@ -412,6 +429,7 @@ platform_check_image() {
 	konka,komi-a31|\
 	mediatek,mt7981-rfb|\
 	mediatek,mt7988a-rfb|\
+	mercusys,mr85x-ubi|\
 	mercusys,mr90x-v1-ubi|\
 	nokia,ea0326gmp|\
 	netis,eap930-v1|\
@@ -422,6 +440,7 @@ platform_check_image() {
 	qihoo,360t7|\
 	qihoo,360t7-ubi|\
 	routerich,ax3000-ubootmod|\
+	teralink,tl3020-256mb|\
 	tplink,be450-ubi|\
 	tplink,tl-xdr4288|\
 	tplink,tl-xdr6086|\
@@ -466,6 +485,7 @@ platform_copy_config() {
 	bananapi,bpi-r4-2g5|\
 	bananapi,bpi-r4-poe|\
 	bananapi,bpi-r4-lite|\
+	bananapi,bpi-r4-pro-8x|\
 	cmcc,rax3000m|\
 	gatonetworks,gdsp|\
 	mediatek,mt7988a-rfb)
